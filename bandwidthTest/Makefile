@@ -217,7 +217,7 @@ endif
 # Target rules
 all: build
 
-build: imageTest
+build: bandwidthTest
 
 check.deps:
 ifeq ($(SAMPLE_ENABLED),0)
@@ -226,19 +226,19 @@ else
 	@echo "Sample is ready - all dependencies have been met"
 endif
 
-imageTest.o:imageTest.cu
+bandwidthTest.o:bandwidthTest.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-imageTest: imageTest.o
+bandwidthTest: bandwidthTest.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 #	$(EXEC) mkdir -p ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
 #	$(EXEC) cp $@ ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
 
 run: build
-	$(EXEC) ./imageTest
+	$(EXEC) ./bandwidthTest
 
 clean:
-	rm -f imageTest imageTest.o
+	rm -f bandwidthTest bandwidthTest.o
 #	rm -rf ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)/deviceQuery
 
 clobber: clean
