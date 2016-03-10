@@ -231,14 +231,15 @@ bandwidthTest.o:bandwidthTest.cu
 
 bandwidthTest: bandwidthTest.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
-#	$(EXEC) mkdir -p ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
-#	$(EXEC) cp $@ ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
+	$(EXEC) mkdir -p bin
+	$(EXEC) mv $@ bin
 
-run: build
-	$(EXEC) ./bandwidthTest
+run: 
+	$(EXEC) ./bin/bandwidthTest
 
 clean:
-	rm -f bandwidthTest bandwidthTest.o
+	rm -f bandwidthTest.o
+	rm -rf ./bin
 #	rm -rf ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)/deviceQuery
 
 clobber: clean
