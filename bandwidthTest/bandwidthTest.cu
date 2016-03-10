@@ -7,6 +7,19 @@
  * Usage:
  * ./bandwidthTest [option]...
  */
+/* A little information about write combined memory
+ *  By default page-locked host memory is allocated as cacheable. 
+ *  It can optionally be allocated as write-combining instead by 
+ *  passing flag cudaHostAllocWriteCombined to cudaHostAlloc(). 
+ *  Write-combining memory frees up the host's L1 and L2 cache 
+ *  resources, making more cache available to the rest of the 
+ *  application. In addition, write-combining memory is not 
+ *  snooped during transfers across the PCI Express bus, which 
+ *  can improve transfer performance by up to 40%.
+ *  Reading from write-combining memory from the host is prohibitively 
+ *  slow, so write-combining memory should in general be used for 
+ *  memory that the host only writes to. 
+ */
 
 // CUDA runtime
 #include <cuda_runtime.h>
@@ -61,15 +74,104 @@ static bool bDontUseGPUTiming;
 
 ////////////////////////////////////////////////////////////////////////////////
 // declaration, forward
+float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode, bool wc);
+float testDeviceToDeviceTransfer(unsigned int);
 void printResultsReadable(unsigned int *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc);
 void printResultsCSV(unsigned int *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc);
 void printHelp(void);
 ////////////////////////////////////////////////////////////////////////////////
 
 
-int main()
+int main(int argc, char **argv)
 {
+    printf("D2D: %lf\n",testDeviceToDeviceTransfer(DEFAULT_SIZE));
+    printf("H2D: %lf\n",testHostToDeviceTransfer(DEFAULT_SIZE, PINNED, true));
+    printf("H2D: %lf\n",testHostToDeviceTransfer(DEFAULT_SIZE, PAGEABLE, false));
     return 0;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//! test the bandwidth of a host to device memcopy of a specific size
+///////////////////////////////////////////////////////////////////////////////
+float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode, bool wc)
+{
+    StopWatchInterface *timer = NULL;
+    float elapsedTimeInMs = 0.0f;
+    float bandwidthInMBs = 0.0f;
+    cudaEvent_t start, stop;
+
+    sdkCreateTimer(&timer);
+    checkCudaErrors(cudaEventCreate(&start));
+    checkCudaErrors(cudaEventCreate(&stop));
+
+    // allocate host memory
+    unsigned char *h_idata = NULL;
+
+    if (memMode == PINNED)
+        checkCudaErrors(cudaHostAlloc((void**)&h_idata, memSize, (wc) ? cudaHostAllocWriteCombined : 0));
+    else{
+        h_idata = (unsigned char*)malloc(memSize);
+        if (h_idata == 0){
+            fprintf(stderr, "Not enough memory on host to run test!\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // initialize host memory
+    for (unsigned int i = 0 ; i < memSize/sizeof(unsigned char) ; i ++)
+        h_idata[i] = (unsigned char)(i & 0xff);
+
+    // allocate device memory
+    unsigned char *d_odata;
+    checkCudaErrors(cudaMalloc((void**)&d_odata, memSize));
+
+    sdkStartTimer(&timer);
+    checkCudaErrors(cudaEventRecord(start, 0));
+
+    // copy data from host to device
+    if (PINNED == memMode)
+        for (unsigned int i = 0 ; i < MEMORY_ITERATIONS ; i ++)
+            checkCudaErrors(cudaMemcpyAsync(d_odata, h_idata, memSize,
+                                            cudaMemcpyHostToDevice, 0));
+    else 
+        for (unsigned int i = 0 ; i < MEMORY_ITERATIONS ; i ++)
+            checkCudaErrors(cudaMemcpy(d_odata, h_idata, memSize,
+                                       cudaMemcpyHostToDevice));
+
+    checkCudaErrors(cudaEventRecord(stop, 0));
+    checkCudaErrors(cudaDeviceSynchronize());
+    sdkStopTimer(&timer);
+    checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
+    
+    if (PAGEABLE == memMode || bDontUseGPUTiming)
+        elapsedTimeInMs = sdkGetTimerValue(&timer);
+
+    sdkResetTimer(&timer);
+    
+    // calculate the bandwidth
+    bandwidthInMBs = ((float)(1<<10) * memSize * MEMORY_ITERATIONS) / ((float)(1<<20) * elapsedTimeInMs);
+
+    // clean up memory
+    checkCudaErrors(cudaEventDestroy(start));
+    checkCudaErrors(cudaEventDestroy(stop));
+    sdkDeleteTimer(&timer);
+
+    if (PINNED == memMode)
+        checkCudaErrors(cudaFreeHost(h_idata));
+    else 
+        free(h_idata);
+
+    checkCudaErrors(cudaFree(d_odata));
+
+    return bandwidthInMBs;
+
+
+
+
+
+
+
 }
 
 
@@ -142,14 +244,6 @@ float testDeviceToDeviceTransfer(unsigned int memSize)
     checkCudaErrors(cudaEventDestroy(stop));
 
     return bandwidthInMBs;
-
-
-
-
-
-
-
-
 
 }
 
