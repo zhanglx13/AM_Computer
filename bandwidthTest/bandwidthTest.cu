@@ -74,6 +74,10 @@ static bool bDontUseGPUTiming;
 
 ////////////////////////////////////////////////////////////////////////////////
 // declaration, forward
+int runTest(const int argc, const char **argv);
+void testBandwidthRange(unsigned int start, unsigned int end, unsigned int increment,
+                        memcpyKind kind, printMode printmode, memoryMode memMode, bool wc);
+float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode, bool wc);
 float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode, bool wc);
 float testDeviceToDeviceTransfer(unsigned int);
 void printResultsReadable(unsigned int *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc);
@@ -84,12 +88,217 @@ void printHelp(void);
 
 int main(int argc, char **argv)
 {
-    printf("D2D: %lf\n",testDeviceToDeviceTransfer(DEFAULT_SIZE));
-    printf("H2D: %lf\n",testHostToDeviceTransfer(DEFAULT_SIZE, PINNED, true));
-    printf("H2D: %lf\n",testHostToDeviceTransfer(DEFAULT_SIZE, PAGEABLE, false));
+    int iRetVal = runTest(argc, (const char **)argv);
+    if (iRetVal < 0){
+        checkCudaErrors(cudaSetDevice(0));
+        cudaDeviceReset();
+    }
+    
+    // finish
+    printf("%s\n", (iRetVal == 0)? "Result = PASS" : "Result = FAIL");
+
+    exit((iRetVal == 0)? EXIT_SUCCESS : EXIT_FAILURE);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//Parse args, run the appropriate tests
+///////////////////////////////////////////////////////////////////////////////
+int runTest(const int argc, const char **argv)
+{
+    int start = DEFAULT_SIZE;
+    int end = DEFAULT_SIZE;
+    int increment = DEFAULT_INCREMENT;
+    bool htod = false;
+    bool dtoh = false;
+    bool dtod = false;
+    bool wc = false;
+    printMode printmode = USER_READABLE;
+    memoryMode memMode = PINNED;
+    char * memModeStr = NULL;
+
+
+    // parse command line arguments
+    if (checkCmdLineFlag(argc, argv, "help")){
+        printHelp();
+        return 0;
+    }
+    // print result format
+    if (checkCmdLineFlag(argc, argv, "csv"))
+        printmode = CSV;
+    // memory mode on host
+    if (getCmdLineArgumentString(argc, argv, "memory", &memModeStr)){
+        if (strcmp(memModeStr, "pageable") == 0)
+            memMode = PAGEABLE;
+        else if (strcmp(memModeStr, "pinned") == 0)
+            memMode = PINNED;
+        else{
+            printf("Invalid memory mode\n");
+            return -1000;
+        }
+    }
+    else
+        memMode = PINNED; // default memMode
+
+    // we will run on device 0 using rang mode
+
+    if (checkCmdLineFlag(argc, argv, "htod")) htod = true;
+    if (checkCmdLineFlag(argc, argv, "dtoh")) dtoh = true;
+    if (checkCmdLineFlag(argc, argv, "dtod")) dtod = true;
+    if (checkCmdLineFlag(argc, argv, "wc")) wc = true;
+    if (checkCmdLineFlag(argc, argv, "cputiming")) bDontUseGPUTiming = true;
+    if (!htod && !dtoh && !dtod){ // default
+        htod = true;
+        dtoh = true;
+        dtod = true;
+    }
+
+    // for rang mode
+    if (checkCmdLineFlag(argc, (const char **)argv, "start"))
+        start = getCmdLineArgumentInt(argc, argv, "start");
+    
+    if (checkCmdLineFlag(argc, (const char **)argv, "end"))
+        end = getCmdLineArgumentInt(argc, argv, "end");
+
+    if (checkCmdLineFlag(argc, (const char **)argv, "increment"))
+        increment = getCmdLineArgumentInt(argc, argv, "increment");
+
+    
+    if (htod)
+        testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
+                            HOST_TO_DEVICE, printmode, memMode, wc);
+    if (dtod)
+        testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
+                            DEVICE_TO_DEVICE, printmode, memMode, wc);
+    if (dtoh)
+        testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
+                            DEVICE_TO_HOST, printmode, memMode, wc);
+
+    // reset CUDA devices
+    cudaSetDevice(0);
+    cudaDeviceReset();
+    
     return 0;
 }
 
+///////////////////////////////////////////////////////////////////////
+//  Run a range mode bandwidth test
+//////////////////////////////////////////////////////////////////////
+void testBandwidthRange(unsigned int start, unsigned int end, unsigned int increment,
+                        memcpyKind kind, printMode printmode, memoryMode memMode, bool wc)
+{
+    // count the number of copies we're going to run
+    unsigned int count = (end - start)/increment + 1;
+    unsigned int *memSizes = (unsigned int *)malloc(sizeof(unsigned int)*count);
+    double *bandwidths = (double*)malloc(sizeof(double)*count);
+    // initialize the bandwidths
+    for (unsigned int i = 0 ; i < count ; i ++)
+        bandwidths[i] = 0.0;
+
+    // run each of the copy
+    for (unsigned int i = 0 ; i < count ; i ++){
+        memSizes[i] = start + i * increment;
+
+        switch(kind){
+            case DEVICE_TO_HOST:
+                bandwidths[i] += testDeviceToHostTransfer(memSizes[i], memMode, wc);
+                break;
+            case HOST_TO_DEVICE:
+                bandwidths[i] += testHostToDeviceTransfer(memSizes[i], memMode, wc);
+                break;
+            case DEVICE_TO_DEVICE:
+                bandwidths[i] += testDeviceToDeviceTransfer(memSizes[i]);
+                break;
+        }
+    }
+    if ( CSV == printmode)
+        printResultsCSV(memSizes, bandwidths, count, kind, memMode, wc);
+    else 
+        printResultsReadable(memSizes, bandwidths, count, kind, memMode, wc);
+
+    // clean up
+    free(memSizes);
+    free(bandwidths);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//  test the bandwidth of a device to host memcopy of a specific size
+///////////////////////////////////////////////////////////////////////////////
+float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode, bool wc)
+{
+    StopWatchInterface *timer = NULL;
+    float elapsedTimeInMs = 0.0f;
+    float bandwidthInMBs = 0.0f;
+    unsigned char *h_idata, *h_odata;
+    cudaEvent_t start, stop;
+
+    sdkCreateTimer(&timer);
+    checkCudaErrors(cudaEventCreate(&start));
+    checkCudaErrors(cudaEventCreate(&stop));
+
+    if ( PINNED == memMode ){ // pinned memory allocation
+        checkCudaErrors(cudaHostAlloc((void**)&h_idata, memSize, (wc)? cudaHostAllocWriteCombined : 0));
+        checkCudaErrors(cudaHostAlloc((void**)&h_odata, memSize, (wc)? cudaHostAllocWriteCombined : 0));
+    }
+    else{ // pageable memory allocation
+        h_idata = (unsigned char*)malloc(memSize);
+        h_odata = (unsigned char*)malloc(memSize);
+    }
+
+    if (h_idata == 0 || h_odata == 0){
+        fprintf(stderr, "Not enough memory space to run the test!!\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    // device memory allocation
+    unsigned char *d_idata;
+    checkCudaErrors(cudaMalloc((void**)&d_idata, memSize));
+
+    // initialize memory on host
+    for (unsigned int i = 0 ; i < memSize/sizeof(unsigned char) ; i ++)
+        h_idata[i] = (unsigned char)(i & 0xff);
+
+    // copy data from host to device
+    if ( PINNED == memMode )
+        checkCudaErrors(cudaMemcpyAsync(d_idata, h_idata, memSize, 
+                                        cudaMemcpyHostToDevice, 0));
+    else
+        checkCudaErrors(cudaMemcpy(d_idata, h_idata, memSize, 
+                                   cudaMemcpyHostToDevice));
+
+    // copy data from device to host
+    sdkStartTimer(&timer);
+    checkCudaErrors(cudaEventRecord(start, 0));
+
+    if ( PINNED == memMode )
+        for ( unsigned int i = 0 ; i < MEMORY_ITERATIONS ; i ++)
+            checkCudaErrors(cudaMemcpyAsync(h_odata, d_idata, memSize, 
+                                            cudaMemcpyDeviceToHost, 0));
+    else
+        for ( unsigned int i = 0 ; i < MEMORY_ITERATIONS; i ++)
+            checkCudaErrors(cudaMemcpy(h_odata, d_idata, memSize, 
+                                       cudaMemcpyDeviceToHost));
+
+    checkCudaErrors(cudaEventRecord(stop, 0));
+    // sync device with host
+    checkCudaErrors(cudaDeviceSynchronize());
+    sdkStopTimer(&timer);
+
+    // calculate the elapsed time
+    checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
+
+    if ( bDontUseGPUTiming || memMode == PAGEABLE)
+        elapsedTimeInMs = sdkGetTimerValue(&timer);
+
+    // calculate the bandwidth
+    bandwidthInMBs = ((float)(1<<10) * memSize * (float)MEMORY_ITERATIONS) / (elapsedTimeInMs * (float)(1<<20));
+        
+    return bandwidthInMBs;
+
+    
+
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 //! test the bandwidth of a host to device memcopy of a specific size
@@ -150,7 +359,7 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode, bool wc
     sdkResetTimer(&timer);
     
     // calculate the bandwidth
-    bandwidthInMBs = ((float)(1<<10) * memSize * MEMORY_ITERATIONS) / ((float)(1<<20) * elapsedTimeInMs);
+    bandwidthInMBs = ((float)(1<<10) * memSize * (float)MEMORY_ITERATIONS) / ((float)(1<<20) * elapsedTimeInMs);
 
     // clean up memory
     checkCudaErrors(cudaEventDestroy(start));
@@ -165,13 +374,6 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode, bool wc
     checkCudaErrors(cudaFree(d_odata));
 
     return bandwidthInMBs;
-
-
-
-
-
-
-
 }
 
 
@@ -232,7 +434,7 @@ float testDeviceToDeviceTransfer(unsigned int memSize)
         elapsedTimeInMs = sdkGetTimerValue(&timer);
 
     // calculate the bandwidth in MB/s
-    bandwidthInMBs = 2.0f * ((float)(1<<10) * memSize * MEMORY_ITERATIONS) /
+    bandwidthInMBs = 2.0f * ((float)(1<<10) * memSize * (float)MEMORY_ITERATIONS) /
                     (elapsedTimeInMs * (float)(1<<20));
 
     // clean up memory
