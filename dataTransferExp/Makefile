@@ -217,7 +217,7 @@ endif
 # Target rules
 all: build
 
-build: bandwidthTest 
+build: dataTransferExp
 
 check.deps:
 ifeq ($(SAMPLE_ENABLED),0)
@@ -226,19 +226,19 @@ else
 	@echo "Sample is ready - all dependencies have been met"
 endif
 
-bandwidthTest.o:bandwidthTest.cu
+dataTransferExp.o:dataTransferExp.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-bandwidthTest: bandwidthTest.o
+dataTransferExp: dataTransferExp.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 	$(EXEC) mkdir -p bin
 	$(EXEC) mv $@ bin
 
 run: 
-	$(EXEC) ./bin/bandwidthTest
+	$(EXEC) ./bin/dataTransferExp
 
 clean:
-	rm -f bandwidthTest.o 
+	rm -f dataTransferExp.o
 	rm -rf ./bin
 #	rm -rf ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)/deviceQuery
 

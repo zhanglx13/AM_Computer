@@ -1,25 +1,14 @@
 /*
- * This is a simple test program to measure the memcopy bandwidth of the GPU.
- * It can measure device to device copy bandwidth, host to device copy bandwidth
- * for pageable and pinned memory, and device to host copy bandwidth for pageable
- * and pinned memory.
- *
- * Usage:
- * ./bandwidthTest [option]...
+ * Running experiments based on the basic bandwidth test program.
+ * Data transfer of D2H and H2D is tested for data size doubled from 
+ * 1KB (1<<10) to 512MB (1<<29). (For nvs 5200m)
+ * The experiments test the bandwidth for pageable, pinned without wc, 
+ * and pinned with wc memory modes.
+ * Transfer time can be calculated later with the memSize and bandwidth.
  */
-/* A little information about write combined memory
- *  By default page-locked host memory is allocated as cacheable. 
- *  It can optionally be allocated as write-combining instead by 
- *  passing flag cudaHostAllocWriteCombined to cudaHostAlloc(). 
- *  Write-combining memory frees up the host's L1 and L2 cache 
- *  resources, making more cache available to the rest of the 
- *  application. In addition, write-combining memory is not 
- *  snooped during transfers across the PCI Express bus, which 
- *  can improve transfer performance by up to 40%.
- *  Reading from write-combining memory from the host is prohibitively 
- *  slow, so write-combining memory should in general be used for 
- *  memory that the host only writes to. 
- */
+
+#define NVS
+
 
 // CUDA runtime
 #include <cuda_runtime.h>
@@ -33,25 +22,19 @@
 #include <memory>
 #include <iostream>
 #include <cassert>
+#include <math.h> // for log2 function
 
 // defines, project
 #define MEMORY_ITERATIONS   10
-#define DEFAULT_SIZE        ( 32 * ( 1 << 20) )     //32 M
-#define DEFAULT_INCREMENT   ( 1 << 22 )             //4 M
-#define CACHE_CLEAR_SIZE    ( 1 << 24 )             //16 M
-
-// defines, experiment
-#define MEMSIZE_MAX         ( 1 << 26 )             //64 M
-#define MEMSIZE_START       ( 1 << 10 )             //1 KB
-#define INCREMENT_1KB       ( 1 << 10 )             //1 KB
-#define INCREMENT_2KB       ( 1 << 11 )             //2 KB
-#define INCREMENT_4KB       ( 1 << 12 )             //4 KB
-#define INCREMENT_8KB       ( 1 << 13 )             //8 KB
+#define START_SIZE          ( 1 << 10 )     //1 KB
+#define END_SIZE_NVS        ( 1 << 29 )     //512 M (This is half the device memory of nvs 5200m)
+#define END_SIZE_TITAN      ( 1 << 32 )     //4 GB (This is for TITAN, whose global memory is 6 GB)
 
 // enums, project
 enum memcpyKind { DEVICE_TO_HOST, HOST_TO_DEVICE, DEVICE_TO_DEVICE };
 enum printMode  { USER_READABLE, CSV };
 enum memoryMode { PINNED, PAGEABLE };
+enum expMode    { BW, TT }; // run bandwidth(BW) mode or transfer time(TT) mode
 
 const char *sMemoryCopyKind[] =
 {
@@ -95,7 +78,7 @@ int main(int argc, char **argv)
     }
     
     // finish
-    printf("%s\n", (iRetVal == 0)? "Result = PASS" : "Result = FAIL");
+//    printf("%s\n", (iRetVal == 0)? "Result = PASS" : "Result = FAIL");
 
     exit((iRetVal == 0)? EXIT_SUCCESS : EXIT_FAILURE);
 }
@@ -106,26 +89,42 @@ int main(int argc, char **argv)
 ///////////////////////////////////////////////////////////////////////////////
 int runTest(const int argc, const char **argv)
 {
-    int start = DEFAULT_SIZE;
-    int end = DEFAULT_SIZE;
-    int increment = DEFAULT_INCREMENT;
+    int start = START_SIZE;
+#ifdef NVS
+    int end = END_SIZE_NVS;
+#else
+    int end = END_SIZE_TITAN; 
+    /* For 4GB value, if the integer is 4 bytes, it is ok when it is cast to unsigned int */
+#endif
+    int increment = 0;
     bool htod = false;
     bool dtoh = false;
-    bool dtod = false;
     bool wc = false;
-    printMode printmode = USER_READABLE;
+    printMode printmode = CSV;
     memoryMode memMode = PINNED;
-    char * memModeStr = NULL;
-
+    expMode expmode = BW;
+    char *memModeStr = NULL;
+    char *expModeStr = NULL;
 
     // parse command line arguments
     if (checkCmdLineFlag(argc, argv, "help")){
         printHelp();
         return 0;
     }
+
+    if (checkCmdLineFlag(argc, argv, "dtoh"))
+        dtoh = true;
+
+    if (checkCmdLineFlag(argc, argv, "htod"))
+        htod = true;
+
+    if (!htod && !dtoh){
+        htod = true;
+        dtoh = true;
+    }
     // print result format
-    if (checkCmdLineFlag(argc, argv, "csv"))
-        printmode = CSV;
+//    if (checkCmdLineFlag(argc, argv, "csv"))
+//        printmode = CSV;
     // memory mode on host
     if (getCmdLineArgumentString(argc, argv, "memory", &memModeStr)){
         if (strcmp(memModeStr, "pageable") == 0)
@@ -140,39 +139,34 @@ int runTest(const int argc, const char **argv)
     else
         memMode = PINNED; // default memMode
 
-    // we will run on device 0 using rang mode
-
-    if (checkCmdLineFlag(argc, argv, "htod")) htod = true;
-    if (checkCmdLineFlag(argc, argv, "dtoh")) dtoh = true;
-    if (checkCmdLineFlag(argc, argv, "dtod")) dtod = true;
+    // experiment mode
+    if (getCmdLineArgumentString(argc, argv, "exp", &expModeStr)){
+        if (strcmp(expModeStr, "bw") == 0)
+            expmode = BW;
+        else if (strcmp(expModeStr, "tt") == 0)
+            expmode = TT;
+        else{
+            printf("Invalid exp mode\n");
+            return -1000;
+        }
+    }
+    else
+        expmode = BW; // default memMode
+    
+    // wc or not
     if (checkCmdLineFlag(argc, argv, "wc")) wc = true;
     if (checkCmdLineFlag(argc, argv, "cputiming")) bDontUseGPUTiming = true;
-    if (!htod && !dtoh && !dtod){ // default
-        htod = true;
-        dtoh = true;
-        dtod = true;
+
+    // exp mode
+    if (expmode == BW){ // bandwidth mode
+        if (htod)
+            testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
+                                HOST_TO_DEVICE, printmode, memMode, wc);
+        if (dtoh)
+            testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
+                                DEVICE_TO_HOST, printmode, memMode, wc);
     }
 
-    // for rang mode
-    if (checkCmdLineFlag(argc, (const char **)argv, "start"))
-        start = getCmdLineArgumentInt(argc, argv, "start");
-    
-    if (checkCmdLineFlag(argc, (const char **)argv, "end"))
-        end = getCmdLineArgumentInt(argc, argv, "end");
-
-    if (checkCmdLineFlag(argc, (const char **)argv, "increment"))
-        increment = getCmdLineArgumentInt(argc, argv, "increment");
-
-    
-    if (htod)
-        testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
-                            HOST_TO_DEVICE, printmode, memMode, wc);
-    if (dtod)
-        testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
-                            DEVICE_TO_DEVICE, printmode, memMode, wc);
-    if (dtoh)
-        testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
-                            DEVICE_TO_HOST, printmode, memMode, wc);
 
     // reset CUDA devices
     cudaSetDevice(0);
@@ -188,7 +182,7 @@ void testBandwidthRange(unsigned int start, unsigned int end, unsigned int incre
                         memcpyKind kind, printMode printmode, memoryMode memMode, bool wc)
 {
     // count the number of copies we're going to run
-    unsigned int count = (end - start)/increment + 1;
+    unsigned int count = log2((float)end) - log2((float)start) + 1;
     unsigned int *memSizes = (unsigned int *)malloc(sizeof(unsigned int)*count);
     double *bandwidths = (double*)malloc(sizeof(double)*count);
     // initialize the bandwidths
@@ -196,9 +190,9 @@ void testBandwidthRange(unsigned int start, unsigned int end, unsigned int incre
         bandwidths[i] = 0.0;
 
     // run each of the copy
-    for (unsigned int i = 0 ; i < count ; i ++){
-        memSizes[i] = start + i * increment;
-
+    unsigned int i = 0;
+    for ( unsigned int memSize = start ; memSize <= end ; memSize <<= 1){
+        memSizes[i] = memSize;
         switch(kind){
             case DEVICE_TO_HOST:
                 bandwidths[i] += testDeviceToHostTransfer(memSizes[i], memMode, wc);
@@ -206,10 +200,8 @@ void testBandwidthRange(unsigned int start, unsigned int end, unsigned int incre
             case HOST_TO_DEVICE:
                 bandwidths[i] += testHostToDeviceTransfer(memSizes[i], memMode, wc);
                 break;
-            case DEVICE_TO_DEVICE:
-                bandwidths[i] += testDeviceToDeviceTransfer(memSizes[i]);
-                break;
         }
+        i ++;
     }
     if ( CSV == printmode)
         printResultsCSV(memSizes, bandwidths, count, kind, memMode, wc);
@@ -294,6 +286,20 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode, bool wc
     // calculate the bandwidth
     bandwidthInMBs = ((float)(1<<10) * memSize * (float)MEMORY_ITERATIONS) / (elapsedTimeInMs * (float)(1<<20));
         
+    // clean up memory
+    checkCudaErrors(cudaEventDestroy(start));
+    checkCudaErrors(cudaEventDestroy(stop));
+    sdkDeleteTimer(&timer);
+
+    if (PINNED == memMode){
+        checkCudaErrors(cudaFreeHost(h_idata));
+        checkCudaErrors(cudaFreeHost(h_odata));
+    }
+    else 
+        free(h_idata);
+
+    checkCudaErrors(cudaFree(d_idata));
+
     return bandwidthInMBs;
 
     
@@ -481,33 +487,15 @@ void printResultsCSV(unsigned int *memSizes, double *bandwidths, unsigned int co
     std::string sConfig;
 
     // log config information
-    if (kind == DEVICE_TO_DEVICE)
-        sConfig += "D2D";
-    else
-    {
-        if (kind == DEVICE_TO_HOST)
-            sConfig += "D2H";
-        else if (kind == HOST_TO_DEVICE)
-            sConfig += "H2D";
+    if (kind == DEVICE_TO_HOST)
+        sConfig += "D2H";
+    else if (kind == HOST_TO_DEVICE)
+        sConfig += "H2D";
 
-        if (memMode == PAGEABLE)
-            sConfig += "-Paged";
-        else if (memMode == PINNED)
-        {
-            sConfig += "-Pinned";
-
-            if (wc)
-                sConfig += "WriteCombined";
-        }
-    }
-    unsigned int i;
-    double dSeconds = 0.0;
-
-    for (i = 0 ; i < count ; i ++){
-        dSeconds = (double)memSizes[i] / (bandwidths[i] * (double)(1<<20));
-        printf("bandwidthTest-%s, Bandwidth = %.1f MB/s, Time = %.5f s, Size = %u bytes\n",
-                sConfig.c_str(), bandwidths[i], dSeconds, memSizes[i]);
-    }
+    printf("%s:\t", sConfig.c_str());
+    for ( unsigned int i = 0 ; i < count ; i ++)
+        printf("%.1f\t", bandwidths[i]);
+    printf("\n");
 }
 
 ///////////////////////////////////////////////////////////////////////////

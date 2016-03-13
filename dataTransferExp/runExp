@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Bandwidth, pageable, (CPUTiming) >> ./result/w_pageable.txt
+./bin/dataTransferExp --exp=bw --memory=pageable >> ./result/bw_pageable.txt
+
+# Bandwidth, pinned, wc=false, GPUTiming >> ./result/bw_pinned.txt
+./bin/dataTransferExp --exp=bw --memory=pinned >> ./result/bw_pinned.txt
+
+# Bandwidth, pinned, wc=true, GPUTiming >> ./result/bw_pinned_wc.txt
+./bin/dataTransferExp --exp=bw --memory=pinned --wc >> ./result/bw_pinned_wc.txt
+
+
