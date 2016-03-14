@@ -217,7 +217,7 @@ endif
 # Target rules
 all: build
 
-build: imageTest
+build: imageTest 
 
 check.deps:
 ifeq ($(SAMPLE_ENABLED),0)
@@ -231,14 +231,15 @@ imageTest.o:imageTest.cu
 
 imageTest: imageTest.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
-#	$(EXEC) mkdir -p ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
-#	$(EXEC) cp $@ ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)
+	$(EXEC) mkdir -p bin
+	$(EXEC) mv $@ bin
 
-run: build
-	$(EXEC) ./imageTest
+run: 
+	$(EXEC) ./bin/imageTest
 
 clean:
-	rm -f imageTest imageTest.o
+	rm -f imageTest.o 
+	rm -rf ./bin
 #	rm -rf ../../bin/$(TARGET_ARCH)/$(TARGET_OS)/$(BUILD_TYPE)/deviceQuery
 
 clobber: clean
