@@ -37,5 +37,9 @@ ehthumbs.db
 Thumbs.db
 
 # Binary files #
-# ##############
+################
 */bin/*
+
+# Text files #
+##############
+*.txt
