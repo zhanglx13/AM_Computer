@@ -6,7 +6,8 @@
  * This sample 
  */
 
-#define NVS
+//#define NVS
+#define TITAN
 
 
 #include <iostream>
@@ -23,11 +24,11 @@
 #define KERNEL_ITERATIONS   100
 #define START_SIZE          ( 1 << 10 )     //1 KB
 #define END_SIZE_NVS        ( 1 << 28 )     //256 MB    (1/4 of the device memory)
-#define END_SIZE_TITAN      ( 1 << 31 )     //2 GB      (1/3 of the device memory)
+#define END_SIZE_TITAN      ( 0x80000000 )     //2 GB      (1/3 of the device memory)
 
 #define BLOCK_SIZE          ( 1 << 7 )      //128 threads per block. This should be tested and tuned
 #define GRID_X              ( 1 << 11 )     //2048
-#define GRID_LIMIT          ( 1 << 16 - 1 ) //65535 for nvs and titan
+#define GRID_LIMIT          ( 1 << 16 - 1 ) //65535 for nvs (TITAN has a much larger limit: 2147483647)
 
 // define, pixel operation
 #define PIXEL_OP(TYPE, idata, odata)    odata = (unsigned TYPE)(idata + 1);  
@@ -179,11 +180,11 @@ int main(const int argc, const char **argv)
         exit(EXIT_FAILURE);
     }
 
-    int start = START_SIZE;
+    unsigned long long start = START_SIZE;
 #ifdef NVS
-    int end = END_SIZE_NVS;
+    unsigned long long end = END_SIZE_NVS;
 #else
-    int end = END_SIZE_TITAN;
+    unsigned long long end = END_SIZE_TITAN;
 #endif
     
     unsigned int pixelSize = 0;
@@ -200,23 +201,29 @@ int main(const int argc, const char **argv)
     double *GPUTime = (double*)malloc(sizeof(double)*count);
     double *CPUTime = (double*)malloc(sizeof(double)*count);
     unsigned int i = 0;
-    for (unsigned int memSize = start ; memSize <= end ; memSize <<= 1){
+    /* 
+     * memSize should be as large as unsigned long long because 
+     * end is set to 2 GB, at the last iteration, memSize will be
+     * end * 2. If memSize is 32-bit, end * 2 will be 0, which is
+     * smaller than end and the loop will never stop.
+     */
+    for (unsigned long long memSize = start ; memSize <= end ; memSize <<= 1){
         switch(pixelSize){
             case 1:
-                GPUTime[i] = imageProcessingGPU_1(memSize);
-                CPUTime[i] = imageProcessingCPU_1(memSize);
+                GPUTime[i] = imageProcessingGPU_1((unsigned int)memSize);
+                CPUTime[i] = imageProcessingCPU_1((unsigned int)memSize);
                 break;
             case 2:
-                GPUTime[i] = imageProcessingGPU_2(memSize);
-                CPUTime[i] = imageProcessingCPU_2(memSize);
+                GPUTime[i] = imageProcessingGPU_2((unsigned int)memSize);
+                CPUTime[i] = imageProcessingCPU_2((unsigned int)memSize);
                 break;
             case 4:
-                GPUTime[i] = imageProcessingGPU_4(memSize);
-                CPUTime[i] = imageProcessingCPU_4(memSize);
+                GPUTime[i] = imageProcessingGPU_4((unsigned int)memSize);
+                CPUTime[i] = imageProcessingCPU_4((unsigned int)memSize);
                 break;
             case 8:
-                GPUTime[i] = imageProcessingGPU_8(memSize);
-                CPUTime[i] = imageProcessingCPU_8(memSize);
+                GPUTime[i] = imageProcessingGPU_8((unsigned int)memSize);
+                CPUTime[i] = imageProcessingCPU_8((unsigned int)memSize);
                 break;
         }
         i ++;

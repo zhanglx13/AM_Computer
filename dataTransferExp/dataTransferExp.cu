@@ -7,8 +7,8 @@
  * Transfer time can be calculated later with the memSize and bandwidth.
  */
 
-#define NVS
-
+//#define NVS
+#define TITAN
 
 // CUDA runtime
 #include <cuda_runtime.h>
@@ -28,7 +28,7 @@
 #define MEMORY_ITERATIONS   10
 #define START_SIZE          ( 1 << 10 )     //1 KB
 #define END_SIZE_NVS        ( 1 << 29 )     //512 M (This is half the device memory of nvs 5200m)
-#define END_SIZE_TITAN      ( 1 << 32 )     //4 GB (This is for TITAN, whose global memory is 6 GB)
+#define END_SIZE_TITAN      ( 0x80000000 )     //2 GB (This is for TITAN, whose global memory is 6 GB)
 
 // enums, project
 enum memcpyKind { DEVICE_TO_HOST, HOST_TO_DEVICE, DEVICE_TO_DEVICE };
@@ -58,13 +58,13 @@ static bool bDontUseGPUTiming;
 ////////////////////////////////////////////////////////////////////////////////
 // declaration, forward
 int runTest(const int argc, const char **argv);
-void testBandwidthRange(unsigned int start, unsigned int end, unsigned int increment,
+void testBandwidthRange(unsigned long long start, unsigned long long end, unsigned int increment,
                         memcpyKind kind, printMode printmode, memoryMode memMode, bool wc);
-float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode, bool wc);
-float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode, bool wc);
+float testDeviceToHostTransfer(unsigned long long memSize, memoryMode memMode, bool wc);
+float testHostToDeviceTransfer(unsigned long long memSize, memoryMode memMode, bool wc);
 float testDeviceToDeviceTransfer(unsigned int);
-void printResultsReadable(unsigned int *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc);
-void printResultsCSV(unsigned int *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc);
+void printResultsReadable(unsigned long long *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc);
+void printResultsCSV(unsigned long long *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc);
 void printHelp(void);
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -89,12 +89,13 @@ int main(int argc, char **argv)
 ///////////////////////////////////////////////////////////////////////////////
 int runTest(const int argc, const char **argv)
 {
-    int start = START_SIZE;
+    unsigned long long start = START_SIZE;
 #ifdef NVS
-    int end = END_SIZE_NVS;
+    unsigned long long end = END_SIZE_NVS;
 #else
-    int end = END_SIZE_TITAN; 
-    /* For 4GB value, if the integer is 4 bytes, it is ok when it is cast to unsigned int */
+    /* For 4GB value, unsigned int is not big enough to store the value */
+    /* uint_max = 4GB-1, so we have to use 64-bit variables */
+    unsigned long long end = END_SIZE_TITAN; 
 #endif
     int increment = 0;
     bool htod = false;
@@ -160,11 +161,9 @@ int runTest(const int argc, const char **argv)
     // exp mode
     if (expmode == BW){ // bandwidth mode
         if (htod)
-            testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
-                                HOST_TO_DEVICE, printmode, memMode, wc);
+            testBandwidthRange(start, end, (unsigned int)increment, HOST_TO_DEVICE, printmode, memMode, wc);
         if (dtoh)
-            testBandwidthRange((unsigned int)start, (unsigned int)end, (unsigned int)increment,
-                                DEVICE_TO_HOST, printmode, memMode, wc);
+            testBandwidthRange(start, end, (unsigned int)increment, DEVICE_TO_HOST, printmode, memMode, wc);
     }
 
 
@@ -178,12 +177,12 @@ int runTest(const int argc, const char **argv)
 ///////////////////////////////////////////////////////////////////////
 //  Run a range mode bandwidth test
 //////////////////////////////////////////////////////////////////////
-void testBandwidthRange(unsigned int start, unsigned int end, unsigned int increment,
+void testBandwidthRange(unsigned long long start, unsigned long long end, unsigned int increment,
                         memcpyKind kind, printMode printmode, memoryMode memMode, bool wc)
 {
     // count the number of copies we're going to run
     unsigned int count = log2((float)end) - log2((float)start) + 1;
-    unsigned int *memSizes = (unsigned int *)malloc(sizeof(unsigned int)*count);
+    unsigned long long *memSizes = (unsigned long long *)malloc(sizeof(unsigned long long)*count);
     double *bandwidths = (double*)malloc(sizeof(double)*count);
     // initialize the bandwidths
     for (unsigned int i = 0 ; i < count ; i ++)
@@ -191,8 +190,9 @@ void testBandwidthRange(unsigned int start, unsigned int end, unsigned int incre
 
     // run each of the copy
     unsigned int i = 0;
-    for ( unsigned int memSize = start ; memSize <= end ; memSize <<= 1){
+    for ( unsigned long long memSize = start ; memSize <= end ; memSize <<= 1){
         memSizes[i] = memSize;
+ //       printf("memSize = %llu\n", memSize);
         switch(kind){
             case DEVICE_TO_HOST:
                 bandwidths[i] += testDeviceToHostTransfer(memSizes[i], memMode, wc);
@@ -217,7 +217,7 @@ void testBandwidthRange(unsigned int start, unsigned int end, unsigned int incre
 ///////////////////////////////////////////////////////////////////////////////
 //  test the bandwidth of a device to host memcopy of a specific size
 ///////////////////////////////////////////////////////////////////////////////
-float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode, bool wc)
+float testDeviceToHostTransfer(unsigned long long memSize, memoryMode memMode, bool wc)
 {
     StopWatchInterface *timer = NULL;
     float elapsedTimeInMs = 0.0f;
@@ -248,7 +248,8 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode, bool wc
     checkCudaErrors(cudaMalloc((void**)&d_idata, memSize));
 
     // initialize memory on host
-    for (unsigned int i = 0 ; i < memSize/sizeof(unsigned char) ; i ++)
+    /* i has to be 64 bits long. Otherwise i will never be bigger than 4 GB*/
+    for (unsigned long long i = 0 ; i < memSize/sizeof(unsigned char) ; i ++)
         h_idata[i] = (unsigned char)(i & 0xff);
 
     // copy data from host to device
@@ -309,7 +310,7 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode, bool wc
 ///////////////////////////////////////////////////////////////////////////////
 //! test the bandwidth of a host to device memcopy of a specific size
 ///////////////////////////////////////////////////////////////////////////////
-float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode, bool wc)
+float testHostToDeviceTransfer(unsigned long long memSize, memoryMode memMode, bool wc)
 {
     StopWatchInterface *timer = NULL;
     float elapsedTimeInMs = 0.0f;
@@ -334,7 +335,8 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode, bool wc
     }
 
     // initialize host memory
-    for (unsigned int i = 0 ; i < memSize/sizeof(unsigned char) ; i ++)
+    /* i has to be 64 bits long. Otherwise i will never be bigger than 4 GB*/
+    for (unsigned long long i = 0 ; i < memSize/sizeof(unsigned char) ; i ++)
         h_idata[i] = (unsigned char)(i & 0xff);
 
     // allocate device memory
@@ -459,7 +461,7 @@ float testDeviceToDeviceTransfer(unsigned int memSize)
 /////////////////////////////////////////////////////////
 //print results in an easily read format
 ////////////////////////////////////////////////////////
-void printResultsReadable(unsigned int *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc)
+void printResultsReadable(unsigned long long *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc)
 {
     printf(" %s Bandwidth\n", sMemoryCopyKind[kind]);
     printf(" %s Memory Transfers\n", sMemoryMode[memMode]);
@@ -472,17 +474,17 @@ void printResultsReadable(unsigned int *memSizes, double *bandwidths, unsigned i
 
     for (i = 0; i < (count - 1); i++)
     {
-        printf("   %u\t\t\t%s%.1f\n", memSizes[i], (memSizes[i] < 10000)? "\t" : "", bandwidths[i]);
+        printf("   %llu\t\t\t%s%.1f\n", memSizes[i], (memSizes[i] < 10000)? "\t" : "", bandwidths[i]);
     }
 
-    printf("   %u\t\t\t%s%.1f\n\n", memSizes[i], (memSizes[i] < 10000)? "\t" : "", bandwidths[i]);
+    printf("   %llu\t\t\t%s%.1f\n\n", memSizes[i], (memSizes[i] < 10000)? "\t" : "", bandwidths[i]);
 }
 
 
 ///////////////////////////////////////////////////////////////////////////
 //print results in a database format
 ///////////////////////////////////////////////////////////////////////////
-void printResultsCSV(unsigned int *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc)
+void printResultsCSV(unsigned long long *memSizes, double *bandwidths, unsigned int count, memcpyKind kind, memoryMode memMode, bool wc)
 {
     std::string sConfig;
 

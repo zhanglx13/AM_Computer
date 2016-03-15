@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Assume each pixel is a char (1 byte)
-./bin/imageTest --char >> ./result/time_1byte.txt
+./bin/imageTest --char >> ./results/time_1byte.txt
 
 # Assume each pixel is a short (2 bytes)
-./bin/imageTest --short >> ./result/time_2bytes.txt
+./bin/imageTest --short >> ./results/time_2bytes.txt
 
 # Assume each pixel is an int (4 bytes)
-./bin/imageTest --int >> ./result/time_4bytes.txt
+./bin/imageTest --int >> ./results/time_4bytes.txt
 
 # Assume each pixel is a long long (8 bytes)
-./bin/imageTest --long >> ./result/time_8bytes.txt
+./bin/imageTest --long >> ./results/time_8bytes.txt
