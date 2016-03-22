@@ -181,7 +181,7 @@ ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 
 # Common includes and paths for CUDA
-INCLUDES  := -I../../NVIDIA_CUDA-7.5_Samples/common/inc
+INCLUDES  := -I/home/lixun/Documents/NVIDIA_CUDA-7.5_Samples/common/inc
 LIBRARIES :=
 
 ################################################################################
@@ -190,7 +190,7 @@ SAMPLE_ENABLED := 1
 
 # Gencode arguments
 # SMS will be passed from the command line.
-SMS ?= 35
+SMS ?= 20 35
 
 ifeq ($(SMS),)
 $(info >>> WARNING - no SM architectures have been specified - waiving sample <<<)
